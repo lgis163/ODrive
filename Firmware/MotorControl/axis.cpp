@@ -313,14 +313,18 @@ bool Axis::start_closed_loop_control() {
         motor_.current_control_.Idq_setpoint_src_.connect_to(&motor_.Idq_setpoint_);
         motor_.current_control_.Vdq_setpoint_src_.connect_to(&motor_.Vdq_setpoint_);
 
+        bool is_acim = motor_.config_.motor_type == Motor::MOTOR_TYPE_ACIM;
+        // phase
         OutputPort<float>* phase_src = sensorless_mode ? &sensorless_estimator_.phase_ : &encoder_.phase_;
-        motor_.current_control_.phase_src_.connect_to(phase_src);
         acim_estimator_.rotor_phase_src_.connect_to(phase_src);
-        
+        OutputPort<float>* stator_phase_src = is_acim ? &acim_estimator_.stator_phase_ : phase_src;
+        motor_.current_control_.phase_src_.connect_to(stator_phase_src);
+        // phase vel
         OutputPort<float>* phase_vel_src = sensorless_mode ? &sensorless_estimator_.phase_vel_ : &encoder_.phase_vel_;
-        motor_.phase_vel_src_.connect_to(phase_vel_src);
-        motor_.current_control_.phase_vel_src_.connect_to(phase_vel_src);
         acim_estimator_.rotor_phase_vel_src_.connect_to(phase_vel_src);
+        OutputPort<float>* stator_phase_vel_src = is_acim ? &acim_estimator_.stator_phase_vel_ : phase_vel_src;
+        motor_.phase_vel_src_.connect_to(stator_phase_vel_src);
+        motor_.current_control_.phase_vel_src_.connect_to(stator_phase_vel_src);
         
         if (sensorless_mode) {
             // Make the final velocity of the loĉk-in spin the setpoint of the
@@ -393,28 +397,33 @@ bool Axis::run_homing() {
 
     error_ &= ~ERROR_MIN_ENDSTOP_PRESSED; // clear this error since we deliberately drove into the endstop
 
-    // pos_setpoint is the starting position for the trap_traj so we need to set it.
-    controller_.pos_setpoint_ = min_endstop_.config_.offset;
-    controller_.vel_setpoint_ = 0.0f;  // Change directions without decelerating
+    std::optional<float> pos_estimate_local = encoder_.pos_estimate_.any();
+    if (pos_estimate_local == std::nullopt || !pos_estimate_local.has_value()){
+        return error_ |= ERROR_UNKNOWN_POSITION, false;
+    }
 
-    // Set our current position in encoder counts to make control more logical
-    encoder_.set_linear_count((int32_t)(controller_.pos_setpoint_ * encoder_.config_.cpr));
-
+    // Calculate the desired position after offset.
+    float input_buffer = pos_estimate_local.value() + min_endstop_.config_.offset;
+    
     controller_.config_.control_mode = Controller::CONTROL_MODE_POSITION_CONTROL;
     controller_.config_.input_mode = Controller::INPUT_MODE_TRAP_TRAJ;
 
-    controller_.input_pos_ = 0.0f;
-    controller_.input_pos_updated();
-    controller_.input_vel_ = 0.0f;
-    controller_.input_torque_ = 0.0f;
-
+    // Initialize closed loop control, and then set the desired location.
     start_closed_loop_control();
-
+    
+    controller_.input_pos_ = input_buffer;
+    controller_.input_pos_updated();
+    
     while ((requested_state_ == AXIS_STATE_UNDEFINED) && motor_.is_armed_ && !controller_.trajectory_done_) {
         osDelay(1);
     }
 
     stop_closed_loop_control();
+
+    // Set the current position to 0.
+    encoder_.set_linear_count(0);
+    controller_.input_pos_ = 0;
+    controller_.input_pos_updated();
 
     controller_.config_.control_mode = stored_control_mode;
     controller_.config_.input_mode = stored_input_mode;

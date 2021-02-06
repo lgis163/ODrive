@@ -5,7 +5,6 @@
 #include <board.h>
 
 #ifdef __cplusplus
-#include <fibre/protocol.hpp>
 #include <communication/interface_usb.h>
 #include <communication/interface_i2c.h>
 #include <communication/interface_uart.h>
@@ -52,7 +51,7 @@ typedef struct {
 } SystemStats_t;
 
 struct PWMMapping_t {
-    endpoint_ref_t endpoint;
+    endpoint_ref_t endpoint = {0, 0};
     float min = 0;
     float max = 0;
 };
@@ -71,7 +70,10 @@ struct BoardConfig_t {
     uint32_t uart_c_baudrate = 115200;
     bool enable_can_a = true;
     bool enable_i2c_a = false;
-    bool enable_ascii_protocol_on_usb = true;
+    ODriveIntf::StreamProtocolType uart0_protocol = ODriveIntf::STREAM_PROTOCOL_TYPE_ASCII_AND_STDOUT;
+    ODriveIntf::StreamProtocolType uart1_protocol = ODriveIntf::STREAM_PROTOCOL_TYPE_ASCII_AND_STDOUT;
+    ODriveIntf::StreamProtocolType uart2_protocol = ODriveIntf::STREAM_PROTOCOL_TYPE_ASCII_AND_STDOUT;
+    ODriveIntf::StreamProtocolType usb_cdc_protocol = ODriveIntf::STREAM_PROTOCOL_TYPE_ASCII_AND_STDOUT;
     float max_regen_current = 0.0f;
     float brake_resistance = DEFAULT_BRAKE_RESISTANCE;
     bool enable_brake_resistor = false;
@@ -120,9 +122,6 @@ struct TaskTimes {
 // Forward Declarations
 class Axis;
 class Motor;
-class ODriveCAN;
-
-extern ODriveCAN *odCAN;
 
 // TODO: move
 // this is technically not thread-safe but practically it might be
@@ -151,6 +150,7 @@ inline ENUMTYPE operator ~ (ENUMTYPE a) { return static_cast<ENUMTYPE>(~static_c
 #include <axis.hpp>
 #include <oscilloscope.hpp>
 #include <communication/communication.h>
+#include <communication/can/odrive_can.hpp>
 
 // Defined in autogen/version.c based on git-derived version numbers
 extern "C" {
@@ -188,7 +188,6 @@ public:
     void control_loop_cb(uint32_t timestamp);
 
     Axis& get_axis(int num) { return axes[num]; }
-    ODriveCAN& get_can() { return *odCAN; }
 
     uint32_t get_interrupt_status(int32_t irqn);
     uint32_t get_dma_status(uint8_t stream_num);
@@ -226,6 +225,8 @@ public:
         0.5f, // trigger_threshold
         nullptr // data_src TODO: change data type
     };
+
+    ODriveCAN can_;
 
     BoardConfig_t config_;
     uint32_t user_config_loaded_ = 0;

@@ -6,7 +6,6 @@ import threading
 import platform
 import subprocess
 import os
-import numpy as np
 from fibre.utils import Event
 import odrive.enums
 from odrive.enums import *
@@ -33,7 +32,20 @@ _VT100Colors = {
     'default': '\x1b[0m'
 }
 
-def calculate_thermistor_coeffs(degree, Rload, R_25, Beta, Tmin, Tmax, plot = False):
+async def get_serial_number_str(device):
+    if hasattr(device, '_serial_number_property'):
+        return format(await device._serial_number_property.read(), 'x').upper()
+    else:
+        return "[unknown serial number]"
+
+def get_serial_number_str_sync(device):
+    if hasattr(device, '_serial_number_property'):
+        return format(device._serial_number_property.read(), 'x').upper()
+    else:
+        return "[unknown serial number]"
+
+def calculate_thermistor_coeffs(degree, Rload, R_25, Beta, Tmin, Tmax, thermistor_bottom = False, plot = False):
+    import numpy as np
     T_25 = 25 + 273.15 #Kelvin
     temps = np.linspace(Tmin, Tmax, 1000)
     tempsK = temps + 273.15
@@ -41,7 +53,10 @@ def calculate_thermistor_coeffs(degree, Rload, R_25, Beta, Tmin, Tmax, plot = Fa
     # https://en.wikipedia.org/wiki/Thermistor#B_or_%CE%B2_parameter_equation
     r_inf = R_25 * np.exp(-Beta/T_25)
     R_temps = r_inf * np.exp(Beta/tempsK)
-    V = Rload / (Rload + R_temps)
+    if thermistor_bottom:
+        V = R_temps / (Rload + R_temps)
+    else:
+        V = Rload / (Rload + R_temps)
 
     fit = np.polyfit(V, temps, degree)
     p1 = np.poly1d(fit)
@@ -62,15 +77,15 @@ def calculate_thermistor_coeffs(degree, Rload, R_25, Beta, Tmin, Tmax, plot = Fa
 class OperationAbortedException(Exception):
     pass
 
-def set_motor_thermistor_coeffs(axis, Rload, R_25, Beta, Tmin, TMax):
-    coeffs = calculate_thermistor_coeffs(3, Rload, R_25, Beta, Tmin, TMax)
+def set_motor_thermistor_coeffs(axis, Rload, R_25, Beta, Tmin, Tmax, thermistor_bottom = False):
+    coeffs = calculate_thermistor_coeffs(3, Rload, R_25, Beta, Tmin, Tmax, thermistor_bottom)
     axis.motor.motor_thermistor.config.poly_coefficient_0 = float(coeffs[3])
     axis.motor.motor_thermistor.config.poly_coefficient_1 = float(coeffs[2])
     axis.motor.motor_thermistor.config.poly_coefficient_2 = float(coeffs[1])
     axis.motor.motor_thermistor.config.poly_coefficient_3 = float(coeffs[0])
 
 def dump_errors(odrv, clear=False, printfunc = print):
-    axes = [(name, axis) for name, axis in odrv._remote_attributes.items() if 'axis' in name]
+    axes = [(name, getattr(odrv, name)) for name in dir(odrv) if name.startswith('axis')]
     axes.sort()
 
     def dump_errors_for_module(indent, name, obj, path, errorcodes):
@@ -321,7 +336,7 @@ def rate_test(device):
     numFrames = 10000
     vals = []
     for _ in range(numFrames):
-        vals.append(device.axis0.loop_counter)
+        vals.append(device.n_evt_control_loop)
 
     loopsPerFrame = (vals[-1] - vals[0])/numFrames
     loopsPerSec = (168000000/(6*3500))

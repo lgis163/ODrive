@@ -44,19 +44,28 @@ function compile(src_file, obj_file)
     tup.frule{
         inputs={src_file},
         extra_inputs = {'autogen/interfaces.hpp', 'autogen/function_stubs.hpp', 'autogen/endpoints.hpp', 'autogen/type_info.hpp'},
-        command='^co^ '..compiler..' -c %f '..tostring(CFLAGS)..' -o %o',
+        command='^o^ '..compiler..' -c %f '..tostring(CFLAGS)..' -o %o',
         outputs={obj_file}
     }
 end
 
 -- Packages --------------------------------------------------------------------
 
+tup.include('fibre-cpp/package.lua')
+fibre_pkg = get_fibre_package({
+    enable_server=true,
+    enable_client=false,
+    allow_heap=false,
+    max_log_verbosity=0,
+    pkgconf=false,
+})
+
 odrive_firmware_pkg = {
     root = '.',
     include_dirs = {
         '.',
         'MotorControl',
-        'fibre/cpp/include',
+        'fibre-cpp/include',
     },
     code_files = {
         'syscalls.c',
@@ -83,14 +92,13 @@ odrive_firmware_pkg = {
         'Drivers/STM32/stm32_gpio.cpp',
         'Drivers/STM32/stm32_nvm.c',
         'Drivers/STM32/stm32_spi_arbiter.cpp',
-        'communication/can_simple.cpp',
+        'communication/can/can_simple.cpp',
+        'communication/can/odrive_can.cpp',    
         'communication/communication.cpp',
         'communication/ascii_protocol.cpp',
         'communication/interface_uart.cpp',
         'communication/interface_usb.cpp',
-        'communication/interface_can.cpp',
         'communication/interface_i2c.cpp',
-        'fibre/cpp/protocol.cpp',
         'FreeRTOS-openocd.c',
         'autogen/version.c'
     }
@@ -334,6 +342,7 @@ CFLAGS += '-mfloat-abi=hard'
 CFLAGS += '-Wno-psabi' -- suppress unimportant note about ABI compatibility in GCC 10
 CFLAGS += { '-Wall', '-Wdouble-promotion', '-Wfloat-conversion', '-fdata-sections', '-ffunction-sections'}
 CFLAGS += '-g'
+CFLAGS += '-DFIBRE_ENABLE_SERVER'
 
 -- linker flags
 LDFLAGS += '-flto -lc -lm -lnosys' -- libs
@@ -352,39 +361,15 @@ elseif boards[boardversion] == nil then
 end
 board = boards[boardversion]
 
--- USB I/O settings
-if tup.getconfig("USB_PROTOCOL") == "native" or tup.getconfig("USB_PROTOCOL") == "" then
-    CFLAGS += "-DUSB_PROTOCOL_NATIVE"
-elseif tup.getconfig("USB_PROTOCOL") == "native-stream" then
-    CFLAGS += "-DUSB_PROTOCOL_NATIVE_STREAM_BASED"
-elseif tup.getconfig("USB_PROTOCOL") == "stdout" then
-    CFLAGS += "-DUSB_PROTOCOL_STDOUT"
-elseif tup.getconfig("USB_PROTOCOL") == "none" then
-    CFLAGS += "-DUSB_PROTOCOL_NONE"
-else
-    error("unknown USB protocol")
+-- --not 
+-- TODO: remove this setting
+if tup.getconfig("USB_PROTOCOL") ~= "native" and tup.getconfig("USB_PROTOCOL") ~= "" then
+    error("CONFIG_USB_PROTOCOL is deprecated")
 end
 
 -- UART I/O settings
-if tup.getconfig("UART_PROTOCOL") == "native" then
-    CFLAGS += "-DUART_PROTOCOL_NATIVE"
-elseif tup.getconfig("UART_PROTOCOL") == "ascii" or tup.getconfig("UART_PROTOCOL") == "" then
-    CFLAGS += "-DUART_PROTOCOL_ASCII"
-elseif tup.getconfig("UART_PROTOCOL") == "stdout" then
-    CFLAGS += "-DUART_PROTOCOL_STDOUT"
-elseif tup.getconfig("UART_PROTOCOL") == "none" then
-    CFLAGS += "-DUART_PROTOCOL_NONE"
-else
-    error("unknown UART protocol "..tup.getconfig("UART_PROTOCOL"))
-end
-
--- GPIO settings
-if tup.getconfig("STEP_DIR") == "y" then
-    if tup.getconfig("UART_PROTOCOL") == "none" then
-        CFLAGS += "-DUSE_GPIO_MODE_STEP_DIR"
-    else
-        error("Step/dir mode conflicts with UART. Set CONFIG_UART_PROTOCOL to none.")
-    end
+if tup.getconfig("UART_PROTOCOL") ~= "ascii" and tup.getconfig("UART_PROTOCOL") ~= "" then
+    error("CONFIG_UART_PROTOCOL is deprecated")
 end
 
 -- Compiler settings
@@ -426,28 +411,29 @@ tup.frule{
 
 -- Autogen files from YAML interface definitions
 root_interface = board.include[1].root_interface
-tup.frule{inputs={'fibre/cpp/interfaces_template.j2'}, command=python_command..' interface_generator_stub.py --definitions odrive-interface.yaml --template %f --output %o', outputs='autogen/interfaces.hpp'}
-tup.frule{inputs={'fibre/cpp/function_stubs_template.j2'}, command=python_command..' interface_generator_stub.py --definitions odrive-interface.yaml --template %f --output %o', outputs='autogen/function_stubs.hpp'}
-tup.frule{inputs={'fibre/cpp/endpoints_template.j2'}, command=python_command..' interface_generator_stub.py --definitions odrive-interface.yaml --generate-endpoints '..root_interface..' --template %f --output %o', outputs='autogen/endpoints.hpp'}
-tup.frule{inputs={'fibre/cpp/type_info_template.j2'}, command=python_command..' interface_generator_stub.py --definitions odrive-interface.yaml --template %f --output %o', outputs='autogen/type_info.hpp'}
+tup.frule{inputs={'fibre-cpp/interfaces_template.j2'}, command=python_command..' interface_generator_stub.py --definitions odrive-interface.yaml --template %f --output %o', outputs='autogen/interfaces.hpp'}
+tup.frule{inputs={'fibre-cpp/function_stubs_template.j2'}, command=python_command..' interface_generator_stub.py --definitions odrive-interface.yaml --template %f --output %o', outputs='autogen/function_stubs.hpp'}
+tup.frule{inputs={'fibre-cpp/endpoints_template.j2'}, command=python_command..' interface_generator_stub.py --definitions odrive-interface.yaml --generate-endpoints '..root_interface..' --template %f --output %o', outputs='autogen/endpoints.hpp'}
+tup.frule{inputs={'fibre-cpp/type_info_template.j2'}, command=python_command..' interface_generator_stub.py --definitions odrive-interface.yaml --template %f --output %o', outputs='autogen/type_info.hpp'}
 
 
 add_pkg(freertos_pkg)
 add_pkg(cmsis_pkg)
 add_pkg(stm32_usb_device_library_pkg)
 add_pkg(board)
+add_pkg(fibre_pkg)
 add_pkg(odrive_firmware_pkg)
 
 
 for _, src_file in pairs(code_files) do
-    obj_file = "build/"..src_file:gsub("/","_")..".o"
+    obj_file = "build/"..src_file:gsub("/","_"):gsub("%.","")..".o"
     object_files += obj_file
     compile(src_file, obj_file)
 end
 
 tup.frule{
     inputs=object_files,
-    command='^c^ '..LINKER..' %f '..tostring(CFLAGS)..' '..tostring(LDFLAGS)..
+    command='^o^ '..LINKER..' %f '..tostring(CFLAGS)..' '..tostring(LDFLAGS)..
             ' -Wl,-Map=%O.map -o %o',
     outputs={'build/ODriveFirmware.elf', extra_outputs={'build/ODriveFirmware.map'}}
 }
@@ -458,7 +444,7 @@ tup.frule{inputs={'build/ODriveFirmware.elf'}, command='arm-none-eabi-objcopy -O
 tup.frule{inputs={'build/ODriveFirmware.elf'}, command='arm-none-eabi-objcopy -O binary -S %f %o', outputs={'build/ODriveFirmware.bin'}}
 
 if tup.getconfig('DOCTEST') == 'true' then
-    TEST_INCLUDES = '-I. -I./MotorControl -I./fibre/cpp/include -I./Drivers/DRV8301 -I./doctest'
+    TEST_INCLUDES = '-I. -I./MotorControl -I./fibre-cpp/include -I./Drivers/DRV8301 -I./doctest'
     tup.foreach_rule('Tests/*.cpp', 'g++ -O3 -std=c++17 '..TEST_INCLUDES..' -c %f -o %o', 'Tests/bin/%B.o')
     tup.frule{inputs='Tests/bin/*.o', command='g++ %f -o %o', outputs='Tests/test_runner.exe'}
     tup.frule{inputs='Tests/test_runner.exe', command='%f'}
